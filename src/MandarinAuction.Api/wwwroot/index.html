@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandarin Auction</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header>
+        <div class="logo" onclick="renderAuction()">Mandarin Auction</div>
+        <div class="user-panel" id="userPanel"></div>
+    </header>
+
+    <main id="app"></main>
+
+    <!-- Auth  -->
+    <div class="modal-overlay" id="authModal">
+        <div class="modal">
+            <button class="modal-close" onclick="closeModal('authModal')">&times;</button>
+            <h2>Mandarin Auction</h2>
+            <div class="auth-tabs">
+                <button id="tabLogin" class="active" onclick="switchAuthTab('login')">Вход</button>
+                <button id="tabRegister" onclick="switchAuthTab('register')">Регистрация</button>
+            </div>
+            <div id="authFormBody"></div>
+        </div>
+    </div>
+
+    <!-- Admin  -->
+    <div class="modal-overlay" id="adminModal">
+        <div class="modal" style="max-width:520px">
+            <button class="modal-close" onclick="closeModal('adminModal')">&times;</button>
+            <h2>Панель администратора</h2>
+            <div id="adminBody"><div class="empty-state" style="padding:2rem"><span>⏳</span>Загрузка...</div></div>
+        </div>
+    </div>
+
+    <script>
+    const API = '';
+    let token = localStorage.getItem('token');
+    let userName = localStorage.getItem('userName');
+    let connection = null;
+    let currentAuthTab = 'login';
+
+    function parseJwt(t) {
+        try {
+            const payload = t.split('.')[1];
+            return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+        } catch { return {}; }
+    }
+
+    function isAdmin() {
+        if (!token) return false;
+        const p = parseJwt(token);
+        const role = p['http://schemas.microsoft.com/ws/2008/06/identity/claims/role']
+                  || p['role'] || '';
+        return role === 'Admin' || (Array.isArray(role) && role.includes('Admin'));
+    }
+
+    function api(path, options = {}) {
+        const headers = { 'Content-Type': 'application/json', ...options.headers };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        return fetch(API + path, { ...options, headers }).then(async r => {
+            const data = await r.json().catch(() => null);
+            if (!r.ok) {
+                const msg = data?.title || data?.detail || data?.message
+                    || (Array.isArray(data) ? data[0] : null)
+                    || (typeof data === 'string' ? data : null)
+                    || `Ошибка ${r.status}`;
+                throw new Error(msg);
+            }
+            return data;
+        });
+    }
+
+    function notify(msg, duration = 3000) {
+        const el = document.createElement('div');
+        el.className = 'notification';
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), duration);
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
+    }
+
+    function timeLeft(expiresAt) {
+        const diff = new Date(expiresAt) - Date.now();
+        if (diff <= 0) return 'Истёк';
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        if (h > 0) return `${h}ч ${m}м`;
+        if (m > 0) return `${m}м ${s}с`;
+        return `${s}с`;
+    }
+
+    function updateAllTimers() {
+        document.querySelectorAll('.timer[data-expires]').forEach(el => {
+            el.textContent = timeLeft(el.dataset.expires);
+        });
+    }
+
+
+    function openAuthModal(tab) {
+        currentAuthTab = tab || 'login';
+        document.getElementById('authModal').classList.add('active');
+        renderAuthForm();
+    }
+
+    function switchAuthTab(tab) {
+        currentAuthTab = tab;
+        renderAuthForm();
+    }
+
+    function renderAuthForm() {
+        document.getElementById('tabLogin').className = currentAuthTab === 'login' ? 'active' : '';
+        document.getElementById('tabRegister').className = currentAuthTab === 'register' ? 'active' : '';
+        const body = document.getElementById('authFormBody');
+        body.innerHTML = `
+            ${currentAuthTab === 'register' ? '<div class="form-group"><label>Имя</label><input id="regName" /></div>' : ''}
+            <div class="form-group"><label>Email</label><input id="authEmail" type="email" /></div>
+            <div class="form-group"><label>Пароль</label><input id="authPass" type="password" /></div>
+            <button class="btn btn-primary" style="width:100%;margin-top:1rem" onclick="doAuth()">${currentAuthTab === 'login' ? 'Войти' : 'Зарегистрироваться'}</button>
+        `;
+    }
+
+    async function doAuth() {
+        const email = document.getElementById('authEmail').value;
+        const password = document.getElementById('authPass').value;
+        try {
+            let data;
+            if (currentAuthTab === 'register') {
+                const un = document.getElementById('regName').value;
+                data = await api('/api/auth/register', { method: 'POST', body: JSON.stringify({ userName: un, email, password }) });
+            } else {
+                data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+            }
+            token = data.token;
+            userName = data.userName;
+            localStorage.setItem('token', token);
+            localStorage.setItem('userName', userName);
+            closeModal('authModal');
+            setupSignalR();
+            renderUserPanel();
+            renderAuction();
+            notify('Добро пожаловать, ' + userName + '!');
+        } catch (e) { notify(e.message); }
+    }
+
+    function renderUserPanel() {
+        const panel = document.getElementById('userPanel');
+        if (token) {
+            panel.innerHTML = `
+                <span class="cashback-badge" id="cashbackBadge" title="Ваш кэшбек при покупке">...</span>
+                <span class="balance-badge" id="balanceBadge">...</span>
+                <button class="btn btn-outline btn-sm" onclick="deposit()">Пополнить</button>
+                ${isAdmin() ? '<button class="btn btn-admin btn-sm" onclick="openAdminPanel()">Админ</button>' : ''}
+                <span style="color:var(--orange-light)">${userName}</span>
+                <button class="btn btn-outline btn-sm" onclick="logout()">Выйти</button>
+            `;
+            loadWalletInfo();
+        } else {
+            panel.innerHTML = `
+                <button class="btn btn-outline btn-sm" onclick="openAuthModal('login')">Войти</button>
+                <button class="btn btn-primary btn-sm" onclick="openAuthModal('register')">Регистрация</button>
+            `;
+        }
+    }
+
+    async function loadWalletInfo() {
+        const balEl = document.getElementById('balanceBadge');
+        const cbEl = document.getElementById('cashbackBadge');
+        try {
+            const w = await api('/api/wallet');
+            const b = w.balance ?? w.Balance;
+            const cb = w.cashbackPercent ?? w.CashbackPercent ?? 0;
+            const tp = w.totalPurchased ?? w.TotalPurchased ?? 0;
+            if (balEl) balEl.textContent = `${Number(b).toFixed(2)} ₽`;
+            if (cbEl) {
+                cbEl.textContent = `Кэшбек ${Number(cb).toFixed(1)}%`;
+                cbEl.title = `Куплено мандаринок: ${tp}. Ваш кэшбек при следующей покупке: ${Number(cb).toFixed(1)}%`;
+            }
+        } catch (e) {
+            if (balEl) balEl.textContent = '—';
+            if (cbEl) cbEl.textContent = 'Кэшбек —';
+        }
+    }
+
+    async function deposit() {
+        const raw = prompt('Введите сумму пополнения (₽):', '100');
+        const amt = parseFloat(raw ?? '');
+        if (!amt || amt <= 0) return notify('Введите корректную сумму');
+        try {
+            await api('/api/wallet/deposit', {
+                method: 'POST',
+                body: JSON.stringify({ amount: amt })
+            });
+            notify(`Баланс пополнен на ${amt.toFixed(2)} ₽`);
+            loadWalletInfo();
+        } catch (e) { notify(e.message); }
+    }
+
+    function logout() {
+        localStorage.clear();
+        token = null; userName = null;
+        setupSignalR();
+        renderUserPanel();
+        renderAuction();
+    }
+
+
+    async function openAdminPanel() {
+        document.getElementById('adminModal').classList.add('active');
+        const body = document.getElementById('adminBody');
+        body.innerHTML = '<div class="empty-state" style="padding:2rem"><span>⏳</span>Загрузка...</div>';
+        try {
+            const s = await api('/api/admin/settings');
+            body.innerHTML = `
+                <div class="settings-section">
+                    <h3>Формула кэшбека</h3>
+                    <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.8rem">
+                        Кэшбек = min(база + кол-во_покупок * бонус, максимум)
+                    </p>
+                    <div class="settings-row">
+                        <div class="form-group">
+                            <label>Базовый %</label>
+                            <input type="number" step="0.1" id="setCbBase" value="${s.cashbackBasePercent}" />
+                            <div class="hint">Начальный процент для новых</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Бонус за покупку %</label>
+                            <input type="number" step="0.1" id="setCbBonus" value="${s.cashbackPerMandarinBonus}" />
+                            <div class="hint">+N% за каждую купленную</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Максимальный кэшбек %</label>
+                        <input type="number" step="0.1" id="setCbMax" value="${s.cashbackMaxPercent}" />
+                        <div class="hint">Потолок процента кэшбека</div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Мандаринки</h3>
+                    <div class="settings-row">
+                        <div class="form-group">
+                            <label>Время жизни (мин)</label>
+                            <input type="number" id="setLifetime" value="${s.mandarinLifetimeMinutes}" />
+                            <div class="hint">Сколько минут лот активен</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Интервал генерации (мин)</label>
+                            <input type="number" id="setInterval" value="${s.generationIntervalMinutes}" />
+                            <div class="hint">Новая мандаринка каждые N мин</div>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" style="width:100%" onclick="saveAdminSettings()">Сохранить настройки</button>
+
+                <div class="admin-actions">
+                    <button class="btn btn-outline btn-sm" onclick="adminGenerateMandarin()">Создать мандаринку</button>
+                    <button class="btn btn-danger btn-sm" onclick="adminCleanup()">Очистить испорченные</button>
+                </div>
+            `;
+        } catch (e) {
+            body.innerHTML = `<div class="empty-state" style="padding:2rem"><span>❌</span>${e.message}</div>`;
+        }
+    }
+
+    async function saveAdminSettings() {
+        try {
+            const data = {
+                cashbackBasePercent: parseFloat(document.getElementById('setCbBase').value),
+                cashbackPerMandarinBonus: parseFloat(document.getElementById('setCbBonus').value),
+                cashbackMaxPercent: parseFloat(document.getElementById('setCbMax').value),
+                mandarinLifetimeMinutes: parseInt(document.getElementById('setLifetime').value),
+                generationIntervalMinutes: parseInt(document.getElementById('setInterval').value)
+            };
+            await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) });
+            notify('Настройки сохранены!');
+        } catch (e) { notify(e.message); }
+    }
+
+    async function adminGenerateMandarin() {
+        try {
+            await api('/api/admin/generate-mandarin', { method: 'POST' });
+            notify('Мандаринка создана!');
+            renderAuction();
+        } catch (e) { notify(e.message); }
+    }
+
+    async function adminCleanup() {
+        try {
+            const res = await api('/api/admin/cleanup', { method: 'POST' });
+            notify(`Очищено: ${res.cleaned}`);
+            renderAuction();
+        } catch (e) { notify(e.message); }
+    }
+
+    // --- Auction grid ---
+
+    async function renderAuction() {
+        document.getElementById('app').innerHTML = '<div class="empty-state"><span>⏳</span>Загрузка...</div>';
+        try {
+            const mandarins = await api('/api/mandarin');
+            if (!mandarins.length) {
+                document.getElementById('app').innerHTML = '<div class="empty-state"><span>🍊</span>Пока нет мандаринок. Скоро появятся!</div>';
+                return;
+            }
+            document.getElementById('app').innerHTML = '<div class="grid" id="mandarinGrid"></div>';
+            const grid = document.getElementById('mandarinGrid');
+            mandarins.forEach(m => grid.appendChild(createCard(m)));
+        } catch (e) {
+            document.getElementById('app').innerHTML = `<div class="empty-state"><span>❌</span>${e.message}</div>`;
+        }
+    }
+
+    function createCard(m) {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.id = `card-${m.id}`;
+        const minBid = (m.currentPrice + 0.01).toFixed(2);
+        div.innerHTML = `
+            <div class="card-img">
+                <img src="${m.imageUrl}" alt="${m.name}" onerror="this.textContent='🍊';this.style.fontSize='5rem'" />
+            </div>
+            <div class="card-body">
+                <div class="card-title">${m.name}</div>
+                <div class="card-prices">
+                    <div><div class="price-label">Текущая ставка</div><div class="price-value">${m.currentPrice.toFixed(2)} ₽</div></div>
+                    <div style="text-align:right"><div class="price-label">Купить сейчас</div><div class="price-value">${m.buyNowPrice.toFixed(2)} ₽</div></div>
+                </div>
+                <div class="card-meta">
+                    Ставок: ${m.bidCount} ${m.highestBidderName ? '· Лидер: ' + m.highestBidderName : ''} · <span class="timer" data-expires="${m.expiresAt}">${timeLeft(m.expiresAt)}</span>
+                </div>
+                ${token ? `
+                    <input class="bid-input" type="number" step="0.01" min="${minBid}" value="${minBid}" id="bid-${m.id}" placeholder="Ваша ставка" />
+                    <div class="card-actions">
+                        <button class="btn btn-primary" onclick="placeBid('${m.id}')">Ставка</button>
+                        <button class="btn btn-success" onclick="buyNow('${m.id}')">Купить</button>
+                    </div>
+                ` : `
+                    <div class="card-actions">
+                        <button class="btn btn-primary" onclick="openAuthModal('login')">Войдите для ставки</button>
+                    </div>
+                `}
+            </div>
+        `;
+        return div;
+    }
+
+    async function placeBid(id) {
+        if (!token) { openAuthModal('login'); return; }
+        const input = document.getElementById(`bid-${id}`);
+        const amount = parseFloat(input.value);
+        try {
+            const res = await api('/api/bid', { method: 'POST', body: JSON.stringify({ mandarinId: id, amount }) });
+            notify(res.message);
+            loadWalletInfo();
+        } catch (e) { notify(e.message); }
+    }
+
+    async function buyNow(id) {
+        if (!token) { openAuthModal('login'); return; }
+        if (!confirm('Купить мандаринку?')) return;
+        try {
+            const res = await api(`/api/bid/buy-now/${id}`, { method: 'POST' });
+            notify(res.message);
+            loadWalletInfo();
+            renderAuction();
+        } catch (e) { notify(e.message); }
+    }
+
+
+    function setupSignalR() {
+        if (connection) {
+            connection.stop();
+            connection = null;
+        }
+
+        const url = `/hubs/auction${token ? '?access_token=' + encodeURIComponent(token) : ''}`;
+        connection = new signalR.HubConnectionBuilder().withUrl(url).withAutomaticReconnect().build();
+
+        connection.on('NewMandarin', m => {
+            notify(`Новая мандаринка: ${m.name}`);
+            const grid = document.getElementById('mandarinGrid');
+            if (grid) grid.prepend(createCard(m));
+            else renderAuction();
+        });
+
+        connection.on('BidPlaced', bid => {
+            const card = document.getElementById(`card-${bid.mandarinId}`);
+            if (card) renderAuction();
+            if (bid.userName !== userName) notify(`${bid.userName} сделал ставку ${bid.amount.toFixed(2)} ₽`);
+        });
+
+        connection.on('MandarinSold', data => {
+            const card = document.getElementById(`card-${data.mandarinId}`);
+            if (card) card.remove();
+            notify('Мандаринка продана!');
+            if (token) loadWalletInfo();
+        });
+
+        connection.on('MandarinExpired', count => {
+            notify(`${count} мандаринок испортились`);
+            renderAuction();
+        });
+
+        connection.on('AuctionWon', data => {
+            notify(`${data.winner} выиграл аукцион за ${data.amount.toFixed(2)} ₽!`);
+            renderAuction();
+            if (token) loadWalletInfo();
+        });
+
+        connection.start().catch(err => console.error('SignalR error:', err));
+    }
+
+    renderUserPanel();
+    setupSignalR();
+    renderAuction();
+    setInterval(updateAllTimers, 30000);
+    </script>
+</body>
+</html>

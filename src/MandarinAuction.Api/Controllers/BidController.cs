@@ -1,7 +1,7 @@
-using MandarinAuction.Api.DTOs.Bid;
 using MandarinAuction.Api.Extensions;
 using MandarinAuction.Api.Hubs;
-using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Services;
+using MandarinAuction.Application.Bid;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -13,10 +13,10 @@ namespace MandarinAuction.Api.Controllers;
 [Authorize]
 public class BidController : ControllerBase
 {
-    private readonly BidService _bidService;
+    private readonly IBidService _bidService;
     private readonly IHubContext<AuctionHub> _hub;
 
-    public BidController(BidService bidService, IHubContext<AuctionHub> hub)
+    public BidController(IBidService bidService, IHubContext<AuctionHub> hub)
     {
         _bidService = bidService;
         _hub = hub;
@@ -29,13 +29,13 @@ public class BidController : ControllerBase
         if (string.IsNullOrEmpty(userId))
             return Unauthorized(new { message = "В токене нет id пользователя" });
 
-        var (success, message, bid) = await _bidService.PlaceBidAsync(userId, request.MandarinId, request.Amount);
+        var result = await _bidService.PlaceBidAsync(userId, request.MandarinId, request.Amount);
 
-        if (!success)
-            return BadRequest(new { message });
+        if (!result.Success)
+            return BadRequest(new { message = result.Message });
 
-        await _hub.Clients.All.SendAsync(AuctionHub.ClientEvents.BidPlaced, bid);
-        return Ok(new { message, bid });
+        await _hub.Clients.All.SendAsync(AuctionHub.ClientEvents.BidPlaced, result.Bid);
+        return Ok(new { message = result.Message, bid = result.Bid });
     }
 
     [HttpPost("buy-now/{mandarinId:guid}")]
@@ -44,13 +44,13 @@ public class BidController : ControllerBase
         var userId = User.GetUserId();
         if (string.IsNullOrEmpty(userId))
             return Unauthorized(new { message = "В токене нет id пользователя" });
-        var (success, message) = await _bidService.BuyNowAsync(userId, mandarinId);
+        var result = await _bidService.BuyNowAsync(userId, mandarinId);
 
-        if (!success)
-            return BadRequest(new { message });
+        if (!result.Success)
+            return BadRequest(new { message = result.Message });
 
         await _hub.Clients.All.SendAsync(AuctionHub.ClientEvents.MandarinSold, new { MandarinId = mandarinId });
-        return Ok(new { message });
+        return Ok(new { message = result.Message });
     }
 
     [HttpGet("{mandarinId:guid}")]

@@ -1,5 +1,5 @@
 using MandarinAuction.Api.Hubs;
-using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Services;
 using Microsoft.AspNetCore.SignalR;
 
 namespace MandarinAuction.Api.BackgroundServices;
@@ -28,22 +28,22 @@ public class MandarinCleanupService : BackgroundService
             try
             {
                 using var scope = _services.CreateScope();
-                var mandarinService = scope.ServiceProvider.GetRequiredService<MandarinService>();
-                var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
+                var mandarinService = scope.ServiceProvider.GetRequiredService<IMandarinService>();
+                var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
 
                 var winners = await mandarinService.FinalizeExpiredAuctionsAsync();
-                foreach (var (mandarin, winningBid) in winners)
+                foreach (var winner in winners)
                 {
                     await _hub.Clients.All.SendAsync(
                         AuctionHub.ClientEvents.AuctionWon,
-                        new { MandarinId = mandarin.Id, Winner = winningBid.User.UserName, Amount = winningBid.Amount },
+                        new { MandarinId = winner.MandarinId, Winner = winner.WinnerName, Amount = winner.WinningBid },
                         stoppingToken);
 
                     _ = emailService.SendAuctionWonAsync(
-                        winningBid.User.Email!,
-                        winningBid.User.UserName!,
-                        mandarin.Name,
-                        winningBid.Amount);
+                        winner.WinnerEmail,
+                        winner.WinnerName,
+                        winner.MandarinName,
+                        winner.WinningBid);
                 }
 
                 var cleaned = await mandarinService.CleanupSpoiledMandarinsAsync();

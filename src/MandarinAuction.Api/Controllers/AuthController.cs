@@ -1,6 +1,6 @@
-using MandarinAuction.Api.Domain.Entities;
 using MandarinAuction.Api.DTOs.Auth;
 using MandarinAuction.Api.Services;
+using MandarinAuction.Domain.Entities;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 

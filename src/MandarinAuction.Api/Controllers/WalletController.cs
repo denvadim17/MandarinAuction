@@ -1,6 +1,6 @@
-using MandarinAuction.Api.DTOs.Wallet;
 using MandarinAuction.Api.Extensions;
-using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Services;
+using MandarinAuction.Application.Wallet;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,10 +11,10 @@ namespace MandarinAuction.Api.Controllers;
 [Authorize]
 public class WalletController : ControllerBase
 {
-    private readonly WalletService _walletService;
-    private readonly CashbackService _cashbackService;
+    private readonly IWalletService _walletService;
+    private readonly ICashbackService _cashbackService;
 
-    public WalletController(WalletService walletService, CashbackService cashbackService)
+    public WalletController(IWalletService walletService, ICashbackService cashbackService)
     {
         _walletService = walletService;
         _cashbackService = cashbackService;

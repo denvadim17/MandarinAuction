@@ -1,9 +1,14 @@
 using System.Text;
 using MandarinAuction.Api.BackgroundServices;
-using MandarinAuction.Api.Data;
-using MandarinAuction.Api.Domain.Entities;
 using MandarinAuction.Api.Hubs;
 using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Persistence;
+using MandarinAuction.Application.Abstractions.Services;
+using MandarinAuction.Application.Services;
+using MandarinAuction.Domain.Entities;
+using MandarinAuction.Infrastructure.Data;
+using MandarinAuction.Infrastructure.Persistence;
+using MandarinAuction.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -13,9 +18,30 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 var dbPath = Path.Combine(builder.Environment.ContentRootPath, "mandarin.db");
-var conn = builder.Configuration.GetConnectionString("Default");
+var connectionString = builder.Configuration.GetConnectionString("Default");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(string.IsNullOrWhiteSpace(conn) ? $"Data Source={dbPath}" : conn));
+    options.UseSqlite(
+        string.IsNullOrWhiteSpace(connectionString) ? $"Data Source={dbPath}" : connectionString,
+        sqlite => sqlite.MigrationsAssembly("MandarinAuction.Api")));
+
+var emailSettings = new EmailSettings();
+builder.Configuration.GetSection("Email").Bind(emailSettings);
+
+builder.Services.AddSingleton(emailSettings);
+builder.Services.AddScoped<IAuctionSettingsRepository, AuctionSettingsRepository>();
+builder.Services.AddScoped<IMandarinRepository, MandarinRepository>();
+builder.Services.AddScoped<IBidRepository, BidRepository>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<ITransactionRepository, TransactionRepository>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+builder.Services.AddScoped<IEmailService, EmailService>();
+
+builder.Services.AddScoped<IAuctionSettingsService, AuctionSettingsService>();
+builder.Services.AddScoped<IMandarinService, MandarinService>();
+builder.Services.AddScoped<IBidService, BidService>();
+builder.Services.AddScoped<IWalletService, WalletService>();
+builder.Services.AddScoped<ICashbackService, CashbackService>();
 
 builder.Services.AddIdentityCore<AppUser>(options =>
     {
@@ -66,16 +92,7 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-var emailSettings = new EmailSettings();
-builder.Configuration.GetSection("Email").Bind(emailSettings);
-builder.Services.AddSingleton(emailSettings);
-
 builder.Services.AddScoped<TokenService>();
-builder.Services.AddScoped<MandarinService>();
-builder.Services.AddScoped<BidService>();
-builder.Services.AddScoped<WalletService>();
-builder.Services.AddScoped<CashbackService>();
-builder.Services.AddScoped<EmailService>();
 
 builder.Services.AddHostedService<MandarinGeneratorService>();
 builder.Services.AddHostedService<MandarinCleanupService>();

@@ -1,9 +1,6 @@
-using MandarinAuction.Api.Data;
-using MandarinAuction.Api.DTOs.Mandarin;
 using MandarinAuction.Api.Hubs;
-using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Services;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.EntityFrameworkCore;
 
 namespace MandarinAuction.Api.BackgroundServices;
 
@@ -33,20 +30,12 @@ public class MandarinGeneratorService : BackgroundService
             try
             {
                 using var scope = _services.CreateScope();
-                var mandarinService = scope.ServiceProvider.GetRequiredService<MandarinService>();
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                var settings = await db.AuctionSettings.FirstAsync(stoppingToken);
+                var mandarinService = scope.ServiceProvider.GetRequiredService<IMandarinService>();
+                var settingsService = scope.ServiceProvider.GetRequiredService<IAuctionSettingsService>();
+                var settings = await settingsService.GetSettingsAsync(stoppingToken);
 
                 var mandarin = await mandarinService.GenerateMandarinAsync();
-
-                var dto = new MandarinDto(
-                    mandarin.Id, mandarin.Name, mandarin.ImageUrl,
-                    mandarin.StartingPrice, mandarin.CurrentPrice, mandarin.BuyNowPrice,
-                    mandarin.Status,
-                    mandarin.CreatedAt, mandarin.ExpiresAt, 0, null
-                );
-                await _hub.Clients.All.SendAsync(AuctionHub.ClientEvents.NewMandarin, dto, stoppingToken);
+                await _hub.Clients.All.SendAsync(AuctionHub.ClientEvents.NewMandarin, mandarin, stoppingToken);
 
                 _logger.LogInformation("Добавлена мандаринка: {Name}", mandarin.Name);
 

@@ -1,5 +1,5 @@
-using MandarinAuction.Api.DTOs.Mandarin;
-using MandarinAuction.Api.Services;
+using MandarinAuction.Application.Abstractions.Services;
+using MandarinAuction.Application.Mandarin;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MandarinAuction.Api.Controllers;
@@ -8,9 +8,9 @@ namespace MandarinAuction.Api.Controllers;
 [Route("api/[controller]")]
 public class MandarinController : ControllerBase
 {
-    private readonly MandarinService _mandarinService;
+    private readonly IMandarinService _mandarinService;
 
-    public MandarinController(MandarinService mandarinService)
+    public MandarinController(IMandarinService mandarinService)
     {
         _mandarinService = mandarinService;
     }
